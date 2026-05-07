@@ -2,6 +2,7 @@ import streamlit as st
 import google.generativeai as genai
 import os
 from PIL import Image
+import io
 
 st.set_page_config(page_title="Fridge-to-Feast Chef", page_icon="🍳")
 
@@ -10,44 +11,46 @@ genai.configure(api_key=api_key)
 model = genai.GenerativeModel('gemini-3-flash-preview')
 
 st.title("🍳 Fridge-to-Feast Chef")
-st.write("Snap photos of your fridge, pantry, and freezer, and I'll create Michelin-star recipes for you!")
+st.write("Upload photos of your fridge, pantry, and freezer!")
 
-# --- THE UPDATE: accept_multiple_files=True ---
-img_files = st.file_uploader("Upload photos of your kitchen inventory...", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
+img_files = st.file_uploader("Upload photos...", type=['jpg', 'jpeg', 'png'], accept_multiple_files=True)
 
 if img_files:
-    st.write(f"✅ {len(img_files)} photos uploaded.")
+    processed_images = []
     
-    # Display the images in a grid so they don't take up too much vertical space
-    cols = st.columns(len(img_files))
-    images_to_process = []
-    for idx, img_file in enumerate(img_files):
-        image = Image.open(img_file)
-        images_to_process.append(image)
-        with cols[idx]:
-            st.image(image, use_container_width=True)
-    
+    # Show progress to avoid "Freezing" feel
+    with st.status("👨‍🍳 Preparing your kitchen photos...", expanded=True) as status:
+        for img_file in img_files:
+            st.write(f"Resizing {img_file.name}...")
+            
+            # Open the image
+            img = Image.open(img_file)
+            
+            # --- THE FIX: RESIZE TO MAX 1000px ---
+            # This keeps quality high enough for AI but reduces file size by 80%
+            img.thumbnail((1000, 1000)) 
+            
+            # Convert back to bytes for Gemini
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=85)
+            processed_images.append({
+                "mime_type": "image/jpeg",
+                "data": img_byte_arr.getvalue()
+            })
+        
+        status.update(label="✅ Photos ready for the Chef!", state="complete")
+
     if st.button("What's for Dinner?", type="primary"):
-        with st.spinner("Chef Gemini is inspecting all the shelves..."):
+        with st.spinner("Chef is analyzing all items..."):
             try:
-                # Prompt updated to recognize multiple images
-                prompt = """
-                Act as a professional chef. Analyze these images from my fridge, pantry, and freezer. 
-                1. Identify all ingredients you see across ALL the photos.
-                2. Suggest 3 creative recipes using these items.
-                3. For each recipe, provide:
-                   - Name & Prep Time
-                   - A 'Chef's Secret' tip to make it better
-                   - Step-by-step instructions
-                Format the response with beautiful Markdown.
-                """
+                prompt = "Identify all ingredients across these photos and suggest 3 recipes with instructions. Format with Markdown."
                 
-                # Send the whole list of images + prompt in one go
-                content = [prompt] + images_to_process
+                # We send the resized data instead of the raw huge files
+                content = [prompt] + processed_images
                 response = model.generate_content(content)
                 
                 st.divider()
                 st.markdown(response.text)
                 
             except Exception as e:
-                st.error(f"The chef had a mishap: {e}")
+                st.error(f"Error: {e}")
